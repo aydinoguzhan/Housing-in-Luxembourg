@@ -3,7 +3,7 @@ title: "STAT570 Homework"
 format: html
 editor: visual
 author:   
-  - Oğuzhan Aydın
+  - Oğuzhan Aydın & Kübra Nur Akdemir
 ---
 
 ## Running Code
@@ -14,10 +14,13 @@ Firstly, required packages are uploaded.
 library(dplyr)
 library(purrr)
 library(readxl)
+library(sqldf)
+library(plotly)
 library(stringr)
 library(janitor)
 library(dplyr)
 library(ggplot2)
+library(leaflet)
 library(purrr)
 library(tidyr)
 ```
@@ -192,136 +195,112 @@ setdiff(unique(commune_level_data$locality),
 
 ## Analysing the Data
 
-How much more expensive or cheaper did housing become relative to the base year (2010) as measured by the index in the year 2012?
+**How average prices have changed in 10 years?**
 
-*Now compute the Laspeyeres index for each commune:*
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
 
-```{r,message=FALSE, warning=FALSE}
-commune_level_data <- commune_level_data %>%
+commune_level_data$year <- as.factor(commune_level_data$year)
+pricebyyear <- commune_level_data |> 
+  group_by(year) |>
+  summarize(Avg_Price = mean(average_price_nominal_euros, na.rm = TRUE)) |>
+  as.data.frame()
+
+plot_ly(pricebyyear, x = ~year, y = ~Avg_Price, type = "scatter",
+        mode = "lines+markers") |>
+  layout(
+    marker = list(color = "blue")
+  )
+
+```
+
+*In the 8 years from 2010 to 2018, prices increased by approximately 0.3 M euros on average. On the other hand, the average price increase in the 2 years between 2018-2020 increased by 0.3m euros, equal to the previous 8 years.*
+
+**Question: Are the provinces with the highest average offers in 10 years located nearby on the map?**
+
+```{r, message=FALSE, warning=FALSE}
+sqldf("SELECT locality, SUM(n_offers) AS NumOffers FROM commune_level_data GROUP BY locality ORDER BY NumOffers DESC LIMIT 5") # Firstly, find the top 5 cities.
+
+top5 <- data.frame(City = c("Luxembourg", "Differdange", "Esch-sur-Alzette", "Ettelbruck", "Pétange"), longitude = c(6.1319, 5.8917, 5.9806, 6.10417, 5.88056),
+           lattitude = c(49.61167, 49.52417, 49.49583, 49.8475, 49.55833))
+center_lon <- median(top5$longitude, na.rm = TRUE)
+center_lat <- median(top5$lattitude, na.rm = TRUE)
+leaflet() %>%
+  addProviderTiles("Esri") %>%
+  addMarkers(
+    data = top5,
+    lng = ~longitude,
+    lat = ~lattitude,
+    popup = ~City
+  ) %>%
+  setView(lng = center_lon, lat = center_lat, zoom = 8)
+```
+
+*When we check the number of offers, we can say that there is more demand for houses in the south of the country, closer to France.*
+
+**Question: How have the square meter pricing of houses in the top 5 cities with the most offers changed over the years?**
+
+```{r, message=FALSE, warning=FALSE}
+result <- commune_level_data %>%
   group_by(locality) %>%
-  mutate(p0 = ifelse(year == "2010", average_price_nominal_euros, NA)) %>%
-  fill(p0, .direction = "down") %>%
-  mutate(p0_m2 = ifelse(year == "2010", average_price_m2_nominal_euros, NA)) %>%
-  fill(p0_m2, .direction = "down") %>%
-  ungroup() %>%
-  mutate(pl = average_price_nominal_euros/p0*100,
-         pl_m2 = average_price_m2_nominal_euros/p0_m2*100)
-```
-
-*Also compute it for the whole country:*
-
-```{r}
-country_level_data <- country_level_data %>%
-  mutate(p0 = ifelse(year == "2010", average_price_nominal_euros, NA)) %>%
-  fill(p0, .direction = "down") %>%
-  mutate(p0_m2 = ifelse(year == "2010", average_price_m2_nominal_euros, NA)) %>%
-  fill(p0_m2, .direction = "down") %>%
-  mutate(pl = average_price_nominal_euros/p0*100,
-         pl_m2 = average_price_m2_nominal_euros/p0_m2*100)
-```
-
-*We are going to create a plot for 5 communes and compare the price evolution in the communes to the national price evolution. Let's first list the communes:*
-
-```{r}
-communes <- c("Luxembourg",
-              "Esch-sur-Alzette",
-              "Mamer",
-              "Schengen",
-              "Wincrange")
-```
-
-***Luxembourg:***
-
-```{r}
+  summarize(NumOffers = sum(n_offers)) %>%
+  arrange(desc(NumOffers))
+top_cities <- head(result$locality, 5)
 
 filtered_data <- commune_level_data %>%
-  filter(locality == communes[1])
+  filter(locality %in% c('Luxembourg', 'Differdange', 'Esch-sur-Alzette', 'Ettelbruck', 'Pétange')) %>%
+  group_by(year, locality) %>%
+  summarize(average_price_m2 = mean(average_price_m2_nominal_euros))
+filtered_data <- as.data.frame(filtered_data)
 
-data_to_plot <- bind_rows(
-  country_level_data,
-  filtered_data
-)
+plot_ly(filtered_data, x = ~year, y = ~average_price_m2, linetype = ~locality, type = "scatter",
+        mode = "lines+markers") |>
+  layout(
+    marker = list(color = "blue")
+  )
 
-lux_plot <- ggplot(data_to_plot) +
-  geom_line(aes(y = pl_m2,
-                x = year,
-                group = locality,
-                colour = locality))
-lux_plot
 ```
 
-***Esch sur Alzette***
+*Similar to the findings in the first question, except Luxembourg, the increase in 8 years between 2010 and 2018 in square meter pricing of houses is almost equal to the increase in 2 years between 2018-2020. On the other hand, Luxembourg always has a higher average price than the others. Its price is almost twice that of others.*
 
-```{r}
-filtered_data <- commune_level_data %>%
-  filter(locality == communes[2])
+**Question: Which localities has the top 10 average price per square meter over the years?**
 
-data_to_plot <- bind_rows(
-  country_level_data,
-  filtered_data
-)
+```{r, message=FALSE, warning=FALSE}
+highest_avg_price_locality <- commune_level_data %>%
+  group_by(locality) %>%
+  summarise(avg_price_per_m2 = mean(average_price_m2_nominal_euros)) %>%
+  arrange(desc(avg_price_per_m2)) %>%
+  head(10)
 
-esch_plot <- ggplot(data_to_plot) +
-  geom_line(aes(y = pl_m2,
-                x = year,
-                group = locality,
-                colour = locality))
-esch_plot
+highest_avg_price_locality
+#| echo: false
+ggplot(highest_avg_price_locality, aes(x = reorder(locality, -avg_price_per_m2), y = avg_price_per_m2, fill = locality)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Locality with Highest Average Price per Square Meter",
+       x = "Locality",
+       y = "Average Price per Square Meter (Nominal Euros)",
+       fill = "Locality") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-***Mamer***
+*According to the bar plot, the average price per square meter of housing in the highest-priced localities is in Luxembourg. The most expensive locality is Luxembourg City, with an average price per square meter of 6000 euros. This is followed by Strassen, Bertrange, Niederanven, and Walferdange.*
 
-```{r}
-filtered_data <- commune_level_data %>%
-  filter(locality == communes[3])
+**Question: What is the relationship between the number of offers and average housing prices per square meter of Schengen**
 
-data_to_plot <- bind_rows(
-  country_level_data,
-  filtered_data
-)
+```{r, message=FALSE, warning=FALSE}
+specific_locality_data <- subset(commune_level_data, locality == "Schengen")
+specific_locality <- "Schengen"
 
-mamer_plot <- ggplot(data_to_plot) +
-  geom_line(aes(y = pl_m2,
-                x = year,
-                group = locality,
-                colour = locality))
-mamer_plot
+# Create a scatter plot to visualize the relationship between number of offers and average housing prices per square meter
+ggplot(specific_locality_data, aes(x = n_offers, y = average_price_m2_nominal_euros, color = factor(year))) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", color = "black") +
+  labs(title = paste("Relationship between Number of Offers and Average Housing Prices in", specific_locality),
+       x = "Number of Offers",
+       y = "Average Price per Square Meter (Nominal Euros)",
+       color = "Year") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 ```
 
-***Schengen***
-
-```{r}
-filtered_data <- commune_level_data %>%
-  filter(locality == communes[4])
-
-data_to_plot <- bind_rows(
-  country_level_data,
-  filtered_data
-)
-
-schengen_plot <- ggplot(data_to_plot) +
-  geom_line(aes(y = pl_m2,
-                x = year,
-                group = locality,
-                colour = locality))
-schengen_plot
-```
-
-***Wincrange***
-
-```{r}
-filtered_data <- commune_level_data %>%
-  filter(locality == communes[5])
-
-data_to_plot <- bind_rows(
-  country_level_data,
-  filtered_data
-)
-
-wincrange_plot <- ggplot(data_to_plot) +
-  geom_line(aes(y = pl_m2,
-                x = year,
-                group = locality,
-                colour = locality))
-wincrange_plot
-```
+*According to plot, there is a strong linear relationship between the number of housing offers and the average house price in Schengen. This means that as the number of housing offers increases, the average house price increases. This is a positive correlation.*
